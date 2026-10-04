@@ -1,0 +1,42 @@
+# Gehört ins öffentliche Repo itaifpro-cmd/creaitive-hub-releases unter .github/workflows/release.yml.
+# Macht aus jedem Tag <app>-v<x.y.z>, den die Release-Pipeline dieses Repos per Deploy Key dort pusht, ein
+# Release. Der Commit hinter dem Tag ist main plus creaitive-hub-<app>.zxp (CEP) bzw. .ccx (UXP) und die Prüfsumme.
+# Die Bridges suchen dort das neueste Release mit dem Tag-Präfix ihrer App.
+name: Release
+
+on:
+  push:
+    tags: ['*-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app="${GITHUB_REF_NAME%%-v*}"
+          version="${GITHUB_REF_NAME#*-v}"
+          case "$app" in
+            premiere) name="Premiere Pro" ;;
+            photoshop) name="Photoshop" ;;
+            aftereffects) name="After Effects" ;;
+            *) name="$app" ;;
+          esac
+          if [ -f "creaitive-hub-$app.ccx" ]; then
+            file="creaitive-hub-$app.ccx"
+            how="Doppelklick auf $file (Creative Cloud installiert es)"
+          else
+            file="creaitive-hub-$app.zxp"
+            how="$file (z. B. über ZXP Installer)"
+          fi
+          sha256sum -c "$file.sha256"
+          gh release create "$GITHUB_REF_NAME" "$file" "$file.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "CreAItive Hub für $name $version" \
+            --notes "CreAItive Hub für $name $version. Installiert sich als Update von selbst; neu installieren mit $how."
