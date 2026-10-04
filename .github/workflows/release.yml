@@ -2,17 +2,26 @@
 # Macht aus jedem Tag <app>-v<x.y.z>, den die Release-Pipeline dieses Repos per Deploy Key dort pusht, ein
 # Release. Der Commit hinter dem Tag ist main plus creaitive-hub-<app>.zxp (CEP) bzw. .ccx (UXP) und die Prüfsumme.
 # Die Bridges suchen dort das neueste Release mit dem Tag-Präfix ihrer App.
+# Danach entsteht ein Bundle-Release mit dem neuesten Paket jeder App (Tag bundle-<app>-<x.y.z>-…, ohne "-v",
+# damit es diesen Workflow nicht erneut auslöst). Es ist "Latest", die README verlinkt seine Dateien.
+# Von Hand (workflow_dispatch) entsteht nur das Bundle.
 name: Release
 
 on:
   push:
     tags: ['*-v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,5 +47,46 @@ jobs:
           sha256sum -c "$file.sha256"
           gh release create "$GITHUB_REF_NAME" "$file" "$file.sha256" \
             --repo "$GITHUB_REPOSITORY" \
+            --latest=false \
             --title "CreAItive Hub für $name $version" \
             --notes "CreAItive Hub für $name $version. Installiert sich als Update von selbst; neu installieren mit $how."
+
+  bundle:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Neuestes veröffentlichtes Release jeder App.
+          tags=$(gh release list --limit 200 --json tagName,createdAt,isDraft,isPrerelease --jq '
+            map(select((.isDraft or .isPrerelease | not) and (.tagName | test("^[a-z]+-v[0-9]"))))
+            | group_by(.tagName | split("-v")[0]) | map(max_by(.createdAt).tagName) | .[]')
+          [ -n "$tags" ] || { echo "Keine App-Releases."; exit 1; }
+          bundle="bundle"; title=""; notes="Alle CreAItive-Hub-Panels in ihrer neuesten Version. Installierte Panels holen sich Updates von selbst."$'\n'
+          mkdir pkg
+          for tag in $tags; do
+            app="${tag%%-v*}"; version="${tag#*-v}"
+            case "$app" in
+              premiere) name="Premiere Pro" ;;
+              photoshop) name="Photoshop" ;;
+              aftereffects) name="After Effects" ;;
+              *) name="$app" ;;
+            esac
+            gh release download "$tag" --dir pkg --pattern "creaitive-hub-$app.*"
+            if [ -f "pkg/creaitive-hub-$app.ccx" ]; then
+              how="Doppelklick auf \`creaitive-hub-$app.ccx\` (Creative Cloud installiert es), dann *Plugins > CreAItive Hub*"
+            else
+              how="\`creaitive-hub-$app.zxp\` mit einem ZXP-Installer installieren, dann *Fenster > Erweiterungen > CreAItive Hub*"
+            fi
+            bundle="$bundle-$app-$version"
+            title="${title:+$title, }$name $version"
+            notes="$notes"$'\n'"- **$name $version:** $how"
+          done
+          (cd pkg && sha256sum -c *.sha256)
+          if gh release view "$bundle" >/dev/null 2>&1; then echo "$bundle gibt es schon."; exit 0; fi
+          gh release create "$bundle" pkg/* --latest --title "CreAItive Hub ($title)" --notes "$notes"
