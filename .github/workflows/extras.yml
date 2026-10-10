@@ -1,0 +1,33 @@
+# Gehört ins öffentliche Repo itaifpro-cmd/creaitive-hub-releases unter .github/workflows/extras.yml.
+# Macht aus jedem Tag extras-<name>-<x.y.z>, den .github/workflows/extras-<name>.yml des Code-Repos per Deploy Key
+# dort pusht, ein Release mit den Zips und ihren Prüfsummen. Die Bridges laden daraus feste Dateien mit fester SHA-256;
+# Bundle und Panel-Updates beachten diese Releases nicht (kein "-v" im Tag).
+name: Extras
+
+on:
+  push:
+    tags: ['extras-*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          name="${GITHUB_REF_NAME#extras-}"
+          extra="${name%-*}"
+          version="${name##*-}"
+          files=$(ls creaitive-$extra-*.zip)
+          sha256sum -c creaitive-$extra-*.zip.sha256
+          gh release create "$GITHUB_REF_NAME" $files creaitive-$extra-*.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --latest=false \
+            --title "Extra $extra $version" \
+            --notes "Programme für das Extra „$extra“ in CreAItive Hub. Die Bridge lädt sie beim Einschalten selbst herunter – nichts von Hand installieren."
